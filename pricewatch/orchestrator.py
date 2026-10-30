@@ -18,15 +18,31 @@ log = logging.getLogger("pricewatch")
 def scan_store(client: Client, base_url: str, store: str, cfg: dict, workers: int = 4) -> list[Observation]:
     index_url = base_url + cfg["index"]
     urls, notes = scout.discover(client, store, index_url)
+    price_hints = getattr(client, "_pricewatch_catalog_hints", {})
     for n in notes:
         log.warning("%s: %s", store, n)
     if not urls:
         return []
 
     def one(url: str) -> Observation:
-        r = client.get(url)
+        r = client.get(url, headers={
+            "Referer": index_url,
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+        })
         obs = extractor.extract(client, store, cfg["adapter"], url, r.text)
-        if r.status_code != 200:
+        hint = price_hints.get(url)
+        if obs.price_cents is None and hint:
+            obs.price_cents = hint["price_cents"]
+            obs.currency = hint["currency"]
+            if not obs.name:
+                obs.name = hint.get("name", "")
+            obs.unit_price_cents = int(round(obs.price_cents / obs.pack_size)) if obs.pack_size > 1 else None
+            obs.notes.append("primary offer unavailable; using the sole price on the catalog card")
+        if r.status_code != 200 and obs.price_cents is None:
             obs.notes.append(f"HTTP {r.status_code}")
         return obs
 

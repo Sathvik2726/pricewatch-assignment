@@ -82,5 +82,7 @@ def run(provider: Provider, snapshots_dir: str | Path, labels_path: str | Path, 
         "elapsed_s": round(time.time() - t0, 2),
     }
     (out_dir / "report.json").write_text(json.dumps(report, indent=2))
-    (out_dir / "label_issues.json").write_text("[]")
+    issues_path = Path(labels_path).with_name("label_issues.json")
+    issues = json.loads(issues_path.read_text()) if issues_path.exists() else []
+    (out_dir / "label_issues.json").write_text(json.dumps(issues, indent=2))
     return report

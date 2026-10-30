@@ -72,6 +72,7 @@ def evaluate(history: list[Observation], new: list[Observation], rules: list[dic
                         recent.append(item)
                         currencies.add(item.currency)
                 if len(currencies) > 1 or (currencies and cur.currency not in currencies):
+                    cur.notes.append("below_median skipped: currency changed within the trailing window")
                     continue
                 if len(recent) >= 3 and cur.price_cents is not None:
                     med = int(round(median(i.price_cents for i in recent)))

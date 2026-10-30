@@ -33,9 +33,13 @@ def parse_money(text: str, default_currency: Optional[str] = None) -> tuple[Opti
     if text is None:
         return None, default_currency
     currency = detect_currency(text, default_currency)
-    # Keep separators until their locale role is known (e.g. 1.299,00 vs 1,299.00).
-    value = re.sub(r"[^\d,.+\-]", "", text).strip()
-    if not value or not re.search(r"\d", value):
+    # Extract one amount token so punctuation in nearby labels (e.g. “excl. tax”) does
+    # not become a fake decimal separator. Spaces and apostrophes may group thousands.
+    match = re.search(r"(?<!\d)[+-]?\d(?:[\d\s,.'’]*\d)?", text)
+    if not match:
+        return None, currency
+    value = re.sub(r"[\s'’]", "", match.group(0))
+    if not value:
         return None, currency
     try:
         if "," in value and "." in value:
@@ -45,9 +49,12 @@ def parse_money(text: str, default_currency: Optional[str] = None) -> tuple[Opti
         elif "," in value:
             tail = value.rsplit(",", 1)[1]
             value = value.replace(",", "." if len(tail) in (1, 2) else "")
-        elif value.count(".") > 1:
+        elif "." in value:
             head, tail = value.rsplit(".", 1)
-            value = head.replace(".", "") + ("." + tail if len(tail) in (1, 2) else tail)
+            if len(tail) in (1, 2):
+                value = head.replace(".", "") + "." + tail
+            else:
+                value = value.replace(".", "")
         amount = Decimal(value)
     except (ValueError, InvalidOperation):
         return None, currency

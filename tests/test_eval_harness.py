@@ -28,6 +28,7 @@ def test_eval_keeps_going_and_caches(tmp_path):
     ]
     label_file = tmp_path / "labels.json"
     label_file.write_text(json.dumps(labels))
+    (tmp_path / "label_issues.json").write_text(json.dumps([{"id": "snapshot", "reason": "visible mismatch"}]))
     out = tmp_path / "out"
     first = run(MixedProvider(), snapshots, label_file, out)
     second = run(MixedProvider(), snapshots, label_file, out)
@@ -36,3 +37,4 @@ def test_eval_keeps_going_and_caches(tmp_path):
     assert first["overall"]["price_exact"] == 0.3333
     assert len(list((out / ".cache").glob("*.json"))) == 2
     assert (out / "report.json").exists() and (out / "label_issues.json").exists()
+    assert json.loads((out / "label_issues.json").read_text()) == [{"id": "snapshot", "reason": "visible mismatch"}]
