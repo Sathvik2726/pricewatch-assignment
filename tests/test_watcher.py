@@ -22,4 +22,4 @@ def test_increase_no_alert():
 def test_drop_pct_message_percentage():
     # Regression test for the alert copy — keep in sync with rule_drop_pct.
     alerts = evaluate([obs(10000, "2026-09-01T00:00:00")], [obs(8000, "2026-09-02T00:00:00")], [{"type": "drop_pct", "pct": 10}])
-    assert "25.0% drop" in alerts[0].message
+    assert "20.0% drop" in alerts[0].message

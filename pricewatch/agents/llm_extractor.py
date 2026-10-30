@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 
 from bs4 import BeautifulSoup
 
@@ -20,19 +21,80 @@ price_cents is the price of the pack actually being sold, in minor units. If the
 
 def clean_html(html: str, limit: int = 12000) -> str:
     soup = BeautifulSoup(html, "html.parser")
+    # Preserve structured product metadata while removing executable/noisy content.
+    structured = "\n".join(s.get_text(" ", strip=True) for s in soup.find_all("script", type="application/ld+json"))
     for t in soup(["script", "style", "noscript", "svg"]):
         t.decompose()
-    text = re.sub(r"\n\s*\n+", "\n", soup.get_text("\n"))
+    text = re.sub(r"\n\s*\n+", "\n", soup.get_text("\n") + "\n" + structured)
     return text[:limit]
 
 
-def extract_with_llm(provider: Provider, store: str, url: str, html: str, timeout: float = 30.0) -> Observation:
+def extract_with_llm(provider: Provider, store: str, url: str, html: str, timeout: float = 30.0,
+                     cache_dir: str | None = None) -> Observation:
     user = f"URL: {url}\n\nPAGE TEXT:\n{clean_html(html)}"
-    raw = provider.complete(SYSTEM, user, metadata={"source_url": url, "store": store}, timeout=timeout)
-    data = json.loads(raw)
+    cache_file = None
+    if cache_dir:
+        import os
+        os.makedirs(cache_dir, exist_ok=True)
+        key = hashlib.sha256((provider.name + "\0" + url + "\0" + user).encode()).hexdigest()
+        cache_file = f"{cache_dir}/{key}.json"
+    if cache_file:
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            raw = None
+    else:
+        raw = None
+    if raw is None:
+        raw = provider.complete(SYSTEM, user, metadata={"source_url": url, "store": store}, timeout=timeout)
+        if cache_file:
+            import os
+            tmp = cache_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(raw, f)
+            os.replace(tmp, cache_file)
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        cleaned = str(raw).strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.I)
+        try:
+            data = json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    price = data.get("price_cents")
+    try:
+        price = int(price) if price is not None else None
+    except (TypeError, ValueError):
+        price = None
+    availability = data.get("availability")
+    if availability not in {"in_stock", "out_of_stock", "unknown"}:
+        availability = "unknown"
+    currency = data.get("currency")
+    if not isinstance(currency, str):
+        currency = ""
     return Observation(
         store=store, product_id=url.rstrip("/").split("/")[-1], url=url, name=data.get("name") or "",
-        price_cents=data.get("price_cents"), currency=data.get("currency") or "",
-        compare_at_cents=data.get("compare_at_cents"), availability=data.get("availability") or "unknown",
-        pack_size=int(data.get("pack_size") or 1), source="llm",
+        price_cents=price, currency=currency,
+        compare_at_cents=_optional_int(data.get("compare_at_cents")), availability=availability,
+        pack_size=max(1, _safe_int(data.get("pack_size"), 1)), source="llm",
+        notes=[] if data else ["provider returned malformed or non-object JSON"],
     )
+
+
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _optional_int(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None

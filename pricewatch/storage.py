@@ -25,8 +25,9 @@ class History:
 
     def add(self, obs: Iterable[Observation]) -> None:
         self.conn.executemany(
-            "INSERT INTO observations(store, product_id, observed_at, data) VALUES (?,?,?,?)",
-            [(o.store, o.product_id, o.observed_at, json.dumps(o.to_dict())) for o in obs],
+            "INSERT INTO observations(store, product_id, observed_at, data) "
+            "SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM observations WHERE store=? AND product_id=? AND observed_at=?)",
+            [(o.store, o.product_id, o.observed_at, json.dumps(o.to_dict()), o.store, o.product_id, o.observed_at) for o in obs],
         )
         self.conn.commit()
 

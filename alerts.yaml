@@ -3,3 +3,7 @@ rules:
   # Fire when a product's price drops by at least `pct` percent versus its previous observation.
   - type: drop_pct
     pct: 10
+  # Compare the current offer with the distribution of recent observations.
+  - type: below_median
+    pct: 15
+    window_days: 30
