@@ -28,7 +28,7 @@ The full hosted scan found 56 products: Corner 10/10 priced, Maple 12/12, Shield
 
 The Anthropic path uses `PRICEWATCH_MODEL` with a default and preserves `metadata.source_url`. The extractor strips noisy markup while retaining JSON-LD, validates output, tolerates fenced or malformed JSON, and can cache raw responses by provider, URL, and page content. The eval now counts provider failures as incorrect and reports accuracy by store and field, errors, latency, and baseline. The provider protocol exposes no token usage or pricing, so the harness cannot report actual token counts or a defensible cost estimate. I could not run a real-key eval in this environment; no `eval/out` model report is claimed.
 
-I reviewed the snapshots and added eight likely label issues to `eval/label_issues.json`, with one-line evidence for each. The coupon-dependent `bz-066` and the tax-inclusive `nk-008` cases are especially arguable. The real Anthropic eval is still unrun because no API key was available; therefore `eval/out/report.json` is not claimed as a model result. The full test suite passes: 25 tests.
+I reviewed the snapshots and added eight likely label issues to `eval/label_issues.json`, with one-line evidence for each. The coupon-dependent `bz-066` and the tax-inclusive `nk-008` cases are especially arguable. The real Anthropic eval is still unrun because no API key was available; therefore `eval/out/report.json` is not claimed as a model result. The CLI can infer a fallback store label from an unfamiliar URL, and the parser accepts `currency: null` when no offer is present, as its output schema allows. The full test suite passes: 27 tests.
 
 ## Where AI helped and where it didn't
 
