@@ -13,6 +13,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import config, storage
 from .agents import extractor
@@ -38,6 +39,10 @@ def cmd_scan(a: argparse.Namespace) -> int:
 def cmd_extract(a: argparse.Namespace) -> int:
     cfg = config.load_stores(a.stores_file)
     store = a.store or next((s for s in cfg["stores"] if f"/stores/{s}/" in a.url), None)
+    # The LLM path is specifically the fallback for stores without a configured
+    # adapter, so it must remain usable for an unfamiliar URL without --store.
+    if store is None and a.llm:
+        store = urlparse(a.url).hostname or "unknown"
     if store is None:
         print("cannot infer --store from url", file=sys.stderr)
         return 2

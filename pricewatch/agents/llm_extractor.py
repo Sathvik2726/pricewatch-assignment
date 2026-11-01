@@ -90,7 +90,10 @@ def extract_with_llm(provider: Provider, store: str, url: str, html: str, timeou
         availability = "unknown"
         malformed = True
     currency = data.get("currency")
-    if not isinstance(currency, str):
+    if currency is None:
+        # A null currency is valid when the page has no identifiable offer.
+        currency = ""
+    elif not isinstance(currency, str):
         currency = ""
         malformed = True
     name = data.get("name")
