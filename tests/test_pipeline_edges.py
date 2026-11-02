@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import hashlib
 
 import requests
 import pytest
@@ -7,7 +8,7 @@ from pricewatch.agents.extractor import extract_corner, extract_flux, extract_sh
 from pricewatch.agents.scout import discover_with_hints
 from pricewatch.agents.normalizer import parse_money
 from pricewatch.agents.watcher import evaluate
-from pricewatch.http import Client
+from pricewatch.http import Client, script_challenge_answer
 from pricewatch.models import Observation
 
 
@@ -116,6 +117,14 @@ def test_flux_major_and_minor_units():
     assert _flux_price_cents(103200, "minor") == 103200
 
 
+def test_flux_signature_uses_hash_algorithm_declared_by_bundle():
+    bundle = '''var _0x1=["fx_c145c8","5d3fa08693fbd3"],_0x2=String.fromCharCode(47),_0x3=32,_0x4="SHA-"+"1";
+    function _0x5(e){return crypto.subtle.digest(_0x4,new TextEncoder().encode(e))}
+    async function _0x6(e){return _0x5(_0x1.join("")+_0x2+e).slice(0,_0x3)}'''
+    expected = hashlib.sha1(b"fx_c145c85d3fa08693fbd3/FLX-3C3T04").hexdigest()[:32]
+    assert _flux_signature(bundle, "FLX-3C3T04") == expected
+
+
 def test_flux_reads_served_contract_and_maps_offer(monkeypatch):
     bundle = '''var _0x1=["salt-a","salt-b"],_0x2=String.fromCharCode(124),_0x3=24;
     fetch("/stores/flux/api/graphql",{body:JSON.stringify({query:"query($sku:String!){product(sku:$sku){sku title offer{amount unit currency stock stale}}}"})});'''
@@ -196,6 +205,15 @@ def test_shield_solves_served_javascript_challenge(monkeypatch):
     assert posted["json"]["a"] == __import__("hashlib").sha256(b"salt|proof").hexdigest()[:16]
     assert waits == [1.3]
     assert result.price_cents == 126836 and result.availability == "in_stock"
+
+
+def test_shield_challenge_uses_served_salt_transform_hash_and_delay():
+    script = '''(async()=>{const e=document.getElementById("cf-c"),t=e.dataset.s,n=e.dataset.p,q=[...t].reverse().join(""),
+    r=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(q+"/"+n)),
+    a=[...new Uint8Array(r)].map(x=>x.toString(16).padStart(2,"0")).join("").slice(8,24);
+    await new Promise(z=>setTimeout(z,1300));await fetch("/stores/shield/challenge",{method:"POST"})})();'''
+    expected = hashlib.sha256(b"salt/secret").hexdigest()[8:24]
+    assert script_challenge_answer(script, "tlas", "secret") == (expected, 1.3)
 
 
 def test_shield_reads_offer_from_inert_application_state():

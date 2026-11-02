@@ -5,6 +5,7 @@ throttle, and retries on transient failures. Every agent goes through `Client.ge
 """
 from __future__ import annotations
 
+import ast
 import threading
 import time
 import hashlib
@@ -20,6 +21,90 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+
+def script_challenge_answer(script: str, salt: str, proof: str) -> tuple[str, float]:
+    """Evaluate the small digest recipe served by the mock Shield challenge."""
+    variables: dict[str, str] = {}
+    salt_name = re.search(r"\b([\w$]+)\s*=\s*[\w$]+\.dataset\.s\b", script)
+    proof_name = re.search(r"\b([\w$]+)\s*=\s*[\w$]+\.dataset\.p\b", script)
+    if salt_name:
+        variables[salt_name.group(1)] = salt
+    if proof_name:
+        variables[proof_name.group(1)] = proof
+
+    for match in re.finditer(
+        r"\b([\w$]+)\s*=\s*\[\s*\.\.\.\s*([\w$]+)\s*\]\.reverse\(\)\.join\(\s*(['\"])(.*?)\3\s*\)",
+        script,
+    ):
+        target, source, _, joiner = match.groups()
+        if source in variables:
+            variables[target] = joiner.join(reversed(variables[source]))
+
+    for match in re.finditer(r"\b([\w$]+)\s*=\s*String\.fromCharCode\((\d+)\)", script):
+        variables[match.group(1)] = chr(int(match.group(2)))
+
+    digest_call = re.search(r"crypto\.subtle\.digest\(\s*(?:(['\"])(.*?)\1|([\w$]+))\s*,", script)
+    algorithm = "SHA-256"
+    if digest_call:
+        if digest_call.group(2) is not None:
+            algorithm = digest_call.group(2)
+        else:
+            variable = digest_call.group(3)
+            assignment = re.search(
+                rf"\b{re.escape(variable)}\s*=\s*((?:['\"][^'\"]*['\"]\s*\+\s*)*['\"][^'\"]*['\"])",
+                script,
+            )
+            if assignment is None:
+                raise ValueError("Shield challenge hash name not found in script")
+            string_parts = re.findall(r"(['\"])(.*?)\1", assignment.group(1))
+            algorithm = "".join(value for _, value in string_parts)
+
+    encode_call = re.search(r"\.encode\(\s*([^)]*?)\s*\)", script)
+    if encode_call:
+        payload = _evaluate_challenge_expression(encode_call.group(1), variables)
+    elif salt_name is None and proof_name is None:
+        # Compatibility with the original mock challenge and its test fixture.
+        payload = f"{salt}|{proof}"
+    else:
+        raise ValueError("Shield challenge digest input not found in script")
+
+    try:
+        digest = hashlib.new(algorithm.replace("-", "").lower(), payload.encode("utf-8")).hexdigest()
+    except ValueError as exc:
+        raise ValueError(f"unsupported Shield challenge hash {algorithm!r}") from exc
+
+    slice_match = re.search(r"\.slice\(\s*(\d+)\s*,\s*(\d+)\s*\)", script)
+    start, end = (int(slice_match.group(1)), int(slice_match.group(2))) if slice_match else (0, 16)
+    delay_match = re.search(r"setTimeout\(\s*[\w$]+\s*,\s*(\d+)\s*\)", script)
+    delay = min(int(delay_match.group(1)) / 1000, 60.0) if delay_match else 1.3
+    return digest[start:end], delay
+
+
+def _evaluate_challenge_expression(expression: str, variables: dict[str, str]) -> str:
+    expression = expression.strip()
+    if expression.startswith("`") and expression.endswith("`"):
+        body = expression[1:-1]
+        return re.sub(r"\$\{([\w$]+)\}", lambda m: variables[m.group(1)], body)
+
+    parts = re.finditer(r"(['\"](?:\\.|[^'\"])*['\"]|[\w$]+)", expression)
+    values: list[str] = []
+    position = 0
+    for match in parts:
+        if not re.fullmatch(r"\s*\+?\s*", expression[position:match.start()]):
+            raise ValueError("unsupported Shield challenge digest expression")
+        token = match.group(1)
+        if token[0] in "'\"":
+            value = ast.literal_eval(token)
+        elif token in variables:
+            value = variables[token]
+        else:
+            raise ValueError(f"Shield challenge variable {token!r} was not resolved")
+        values.append(str(value))
+        position = match.end()
+    if not values or not re.fullmatch(r"\s*\+?\s*", expression[position:]):
+        raise ValueError("unsupported Shield challenge digest expression")
+    return "".join(values)
 
 
 class Client:
@@ -131,11 +216,16 @@ class Client:
         if not salt or not proof or not endpoint:
             return False
         s, p = salt.group(2), proof.group(2)
-        answer = hashlib.sha256(f"{s}|{p}".encode("utf-8")).hexdigest()[:16]
+        scripts = re.findall(r"<script\b[^>]*>(.*?)</script>", html, flags=re.I | re.S)
+        script = next((body for body in scripts if "fetch(" in body), "")
+        try:
+            answer, delay = script_challenge_answer(script, s, p)
+        except (ValueError, KeyError, SyntaxError):
+            return False
         origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
         # The served browser code waits before submitting; keep the same delay and
         # route the proof through Client so robots policy and Crawl-delay still apply.
-        time.sleep(1.3)
+        time.sleep(delay)
         try:
             response = self.request("POST", urljoin(url, endpoint.group(2)), _allow_challenge=False,
                                     headers={"Referer": url, "Origin": origin, "Content-Type": "application/json"},

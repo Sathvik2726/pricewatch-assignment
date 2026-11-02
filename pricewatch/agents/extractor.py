@@ -20,7 +20,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from ..http import Client
+from ..http import Client, script_challenge_answer
 from ..models import Observation
 from .normalizer import parse_money, unit_price
 
@@ -180,13 +180,19 @@ def extract_shield(client: Client, store: str, url: str, html: str) -> Observati
         salt, proof = challenge.get("data-s"), challenge.get("data-p")
         if not salt or not proof:
             break
-        script = soup.find("script")
-        endpoint_match = re.search(r"fetch\(\s*(['\"])(.*?)\1", script.get_text() if script else "")
+        script = soup.find("script", string=re.compile(r"fetch\(")) or next(
+            (tag for tag in soup.find_all("script") if "fetch(" in tag.get_text()), None
+        )
+        script_text = script.get_text() if script else ""
+        endpoint_match = re.search(r"fetch\(\s*(['\"])(.*?)\1", script_text)
         if endpoint_match is None:
             break
-        digest = hashlib.sha256(f"{salt}|{proof}".encode("utf-8")).hexdigest()[:16]
-        # Match the delay observed in the served challenge script and its Crawl-delay.
-        time.sleep(1.3)
+        try:
+            digest, delay = script_challenge_answer(script_text, salt, proof)
+        except (ValueError, KeyError, SyntaxError):
+            break
+        # Match the delay observed in the served challenge script; Client adds Crawl-delay.
+        time.sleep(delay)
         origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
         try:
             posted = client.post(urljoin(url, endpoint_match.group(2)),
@@ -310,10 +316,44 @@ def _flux_signature(bundle: str, sku: str) -> str:
         raise ValueError("Flux signature parameters not found in application script")
     secret = key_match.group(2) + key_match.group(4)
     separator = chr(int(separator_match.group(1)))
-    length_match = re.search(r"\.slice\(0\s*,\s*(\d+)\s*\)", bundle)
-    length = int(length_match.group(1)) if length_match else 24
-    digest = hashlib.sha256(f"{secret}{separator}{sku}".encode("utf-8")).hexdigest()
+    length_match = re.search(r"\.slice\(0\s*,\s*(\d+|[\w$]+)\s*\)", bundle)
+    length = 24
+    if length_match:
+        length_value = length_match.group(1)
+        if length_value.isdigit():
+            length = int(length_value)
+        else:
+            length_decl = re.search(rf"\b{re.escape(length_value)}\s*=\s*(\d+)\b", bundle)
+            if length_decl is None:
+                raise ValueError("Flux signature length not found in application script")
+            length = int(length_decl.group(1))
+    algorithm = _flux_hash_algorithm(bundle)
+    try:
+        hasher = hashlib.new(algorithm.replace("-", "").lower())
+    except ValueError as exc:
+        raise ValueError(f"unsupported Flux signature hash {algorithm!r}") from exc
+    hasher.update(f"{secret}{separator}{sku}".encode("utf-8"))
+    digest = hasher.hexdigest()
     return digest[:length]
+
+
+def _flux_hash_algorithm(bundle: str) -> str:
+    """Read the WebCrypto digest name from the served bundle, including split literals."""
+    call = re.search(r"crypto\.subtle\.digest\(\s*(\w+|(['\"])(.*?)\2)\s*,", bundle)
+    if call is None:
+        # Older public-seed bundles and existing fixtures use SHA-256 implicitly.
+        return "SHA-256"
+    if call.group(3) is not None:
+        return call.group(3)
+    variable = call.group(1)
+    assignment = re.search(rf"\b{re.escape(variable)}\s*=\s*((?:['\"][^'\"]*['\"]\s*\+\s*)*['\"][^'\"]*['\"])", bundle)
+    if assignment is None:
+        raise ValueError("Flux signature hash name not found in application script")
+    pieces = re.findall(r"(['\"])(.*?)\1", assignment.group(1))
+    algorithm = "".join(value for _, value in pieces)
+    if not algorithm:
+        raise ValueError("Flux signature hash name is empty")
+    return algorithm
 
 
 def _flux_price_cents(amount, unit) -> int | None:
