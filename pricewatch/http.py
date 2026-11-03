@@ -60,9 +60,9 @@ def script_challenge_answer(script: str, salt: str, proof: str) -> tuple[str, fl
             string_parts = re.findall(r"(['\"])(.*?)\1", assignment.group(1))
             algorithm = "".join(value for _, value in string_parts)
 
-    encode_call = re.search(r"\.encode\(\s*([^)]*?)\s*\)", script)
-    if encode_call:
-        payload = _evaluate_challenge_expression(encode_call.group(1), variables)
+    payload_expression = _call_argument(script, ".encode")
+    if payload_expression is not None:
+        payload = _evaluate_challenge_expression(payload_expression, variables)
     elif salt_name is None and proof_name is None:
         # Compatibility with the original mock challenge and its test fixture.
         payload = f"{salt}|{proof}"
@@ -87,24 +87,60 @@ def _evaluate_challenge_expression(expression: str, variables: dict[str, str]) -
         body = expression[1:-1]
         return re.sub(r"\$\{([\w$]+)\}", lambda m: variables[m.group(1)], body)
 
-    parts = re.finditer(r"(['\"](?:\\.|[^'\"])*['\"]|[\w$]+)", expression)
+    parts = re.finditer(
+        r"String\.fromCharCode\(\s*(\d+)\s*\)|(['\"](?:\\.|[^'\"])*['\"]|[\w$]+)",
+        expression,
+    )
     values: list[str] = []
     position = 0
     for match in parts:
         if not re.fullmatch(r"\s*\+?\s*", expression[position:match.start()]):
             raise ValueError("unsupported Shield challenge digest expression")
-        token = match.group(1)
-        if token[0] in "'\"":
-            value = ast.literal_eval(token)
-        elif token in variables:
-            value = variables[token]
+        if match.group(1) is not None:
+            value = chr(int(match.group(1)))
         else:
-            raise ValueError(f"Shield challenge variable {token!r} was not resolved")
+            token = match.group(2)
+            if token[0] in "'\"":
+                value = ast.literal_eval(token)
+            elif token in variables:
+                value = variables[token]
+            else:
+                raise ValueError(f"Shield challenge variable {token!r} was not resolved")
         values.append(str(value))
         position = match.end()
     if not values or not re.fullmatch(r"\s*\+?\s*", expression[position:]):
         raise ValueError("unsupported Shield challenge digest expression")
     return "".join(values)
+
+
+def _call_argument(script: str, method: str) -> str | None:
+    """Return a JavaScript call's first argument while respecting nested calls/strings."""
+    call = re.search(rf"{re.escape(method)}\s*\(", script)
+    if call is None:
+        return None
+    start = call.end()
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(start, len(script)):
+        char = script[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in "'\"`":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                return script[start:index].strip()
+            depth -= 1
+    raise ValueError(f"unterminated JavaScript call {method}")
 
 
 class Client:

@@ -28,8 +28,14 @@ def clean_html(html: str, limit: int = 12000) -> str:
     structured = "\n".join(s.get_text(" ", strip=True) for s in structured_scripts)
     for t in soup(["script", "style", "noscript", "svg"]):
         t.decompose()
-    text = re.sub(r"\n\s*\n+", "\n", soup.get_text("\n") + "\n" + structured)
-    return text[:limit]
+    visible = re.sub(r"\n\s*\n+", "\n", soup.get_text("\n"))
+    # Product JSON-LD and hydration state often carry the authoritative offer.
+    # Keep them at the front so a long page cannot truncate them out of the prompt.
+    if structured:
+        structured = structured[:limit]
+        visible = visible[:max(0, limit - len(structured) - 1)]
+        return structured + "\n" + visible
+    return visible[:limit]
 
 
 def extract_with_llm(provider: Provider, store: str, url: str, html: str, timeout: float = 30.0,
@@ -68,7 +74,20 @@ def extract_with_llm(provider: Provider, store: str, url: str, html: str, timeou
         try:
             data = json.loads(cleaned)
         except (json.JSONDecodeError, TypeError):
+            # Some models wrap an otherwise valid object in a short preamble.
+            # Decode the first complete JSON object without accepting arbitrary text.
             data = {}
+            decoder = json.JSONDecoder()
+            for start, char in enumerate(cleaned):
+                if char != "{":
+                    continue
+                try:
+                    candidate, _ = decoder.raw_decode(cleaned[start:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(candidate, dict):
+                    data = candidate
+                    break
     if not isinstance(data, dict):
         data = {}
     required = {"name", "price_cents", "currency", "availability", "pack_size", "compare_at_cents"}

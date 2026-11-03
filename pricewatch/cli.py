@@ -50,8 +50,17 @@ def cmd_extract(a: argparse.Namespace) -> int:
     html = Path(a.html).read_text() if a.html else client.get(a.url).text
     if a.llm:
         from .agents.llm_extractor import extract_with_llm
-        from .providers import load_provider
-        obs = extract_with_llm(load_provider(a.provider), store, a.url, html)
+        from .providers import ProviderError, load_provider
+        try:
+            obs = extract_with_llm(load_provider(a.provider), store, a.url, html)
+        except ProviderError:
+            # Keep the machine-readable CLI contract even when a provider is
+            # temporarily unavailable. Diagnostics go to stderr via logging.
+            logging.error("LLM provider failed during extraction")
+            obs = Observation(store=store, product_id=a.url.rstrip("/").split("/")[-1],
+                              url=a.url, name="", price_cents=None, currency="",
+                              availability="unknown", source="llm",
+                              notes=["LLM provider error; no offer could be extracted"])
     else:
         obs = extractor.extract(client, store, cfg["stores"].get(store, {}).get("adapter", store), a.url, html)
     print(json.dumps(obs.to_dict(), indent=2))

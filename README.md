@@ -74,10 +74,11 @@ pricewatch scan --stores-url http://localhost:4000 --store corner
 If the last command prints ten JSON lines with prices, you're set. Open
 http://localhost:4000 in a browser and look through the five stores before writing any code.
 
-For Stage 3: `pip install -e ".[llm]"` and export your own `ANTHROPIC_API_KEY` (or
-`OPENAI_API_KEY` — develop with whichever you have). You pay for your own development usage; the
-whole assignment should cost well under $2. Grading uses **our** Anthropic key against your
-`--provider anthropic` path, so make sure that path works even if you developed with another provider.
+Anthropic is included in the base install because the grader runs the Anthropic extractor with
+its own `ANTHROPIC_API_KEY`. For local Stage 3 work, export your own `ANTHROPIC_API_KEY` (or
+install `.[llm]` and use `OPENAI_API_KEY` if you prefer OpenAI). You pay for your own development
+usage; the whole assignment should cost well under $2. Grading uses **our** Anthropic key against
+your `--provider anthropic` path, so make sure that path works even if you developed with another provider.
 
 ## 4. The work
 
