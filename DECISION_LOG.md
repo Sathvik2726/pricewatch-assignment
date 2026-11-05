@@ -60,11 +60,13 @@ from common grader paths.
 I added ten suspected label issues; nk-014 (six-pack) and nk-022 ("Utsolgt") are directly
 visible in their saved pages. The other entries remain candidates and should be compared with
 the grader's answer key. The full Anthropic 90-page run and hidden-store Part C have not been
-verified with a real Anthropic key. My local qwen3:0.6b smoke test returned incorrect currency
-and pack size on one product, so it is not evidence of model accuracy. The grader attempt 2
-score was 66.2/75; its report said all 40 hidden extractor invocations exited nonzero or
-printed no JSON. The Anthropic compatibility fix addresses the likely SDK crash, but only a
-new grader attempt can establish the score.
+verified with a real Anthropic key. I ran all 90 saved pages against local Ollama
+`qwen3:0.6b`; it took 575.5 seconds and produced 11.1% exact-price accuracy, 11.1% currency
+accuracy, 14.4% availability accuracy, and 13.3% pack-size accuracy. The harness recorded 52
+timeouts and 22 malformed outputs. This small local model is not suitable evidence of
+extraction quality. The grader attempt 2 score was 66.2/75; its report said all 40 hidden
+extractor invocations exited nonzero or printed no JSON. The Anthropic compatibility fix
+addresses the likely SDK crash, but only a new grader attempt can establish the score.
 
 ## Where AI helped and where it didn't
 
