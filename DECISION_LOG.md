@@ -5,7 +5,7 @@ levels_attempted: [1, 2, 3, 4, 5]
 llm_provider: "anthropic (real-key eval); Ollama for local comparison"
 llm_model: "claude-haiku-4-5; qwen3:0.6b local comparison"
 ai_tools_used: ["ChatGPT"]
-hours_spent: 1
+hours_spent: 8
 ---
 
 # Decision log
