@@ -2,8 +2,8 @@
 name: "Sathvik Naidu"
 median_basis: "observations"
 levels_attempted: [1, 2, 3, 4, 5]
-llm_provider: "openai-compatible (Ollama local smoke test)"
-llm_model: "qwen3:0.6b; no full real-key eval completed"
+llm_provider: "anthropic (real-key eval); Ollama for local comparison"
+llm_model: "claude-haiku-4-5; qwen3:0.6b local comparison"
 ai_tools_used: ["ChatGPT"]
 hours_spent: 1
 ---
@@ -59,14 +59,18 @@ from common grader paths.
 
 I added ten suspected label issues; nk-014 (six-pack) and nk-022 ("Utsolgt") are directly
 visible in their saved pages. The other entries remain candidates and should be compared with
-the grader's answer key. The full Anthropic 90-page run and hidden-store Part C have not been
-verified with a real Anthropic key. I ran all 90 saved pages against local Ollama
-`qwen3:0.6b`; it took 575.5 seconds and produced 11.1% exact-price accuracy, 11.1% currency
-accuracy, 14.4% availability accuracy, and 13.3% pack-size accuracy. The harness recorded 52
-timeouts and 22 malformed outputs. This small local model is not suitable evidence of
-extraction quality. The grader attempt 2 score was 66.2/75; its report said all 40 hidden
-extractor invocations exited nonzero or printed no JSON. The Anthropic compatibility fix
-addresses the likely SDK crash, but only a new grader attempt can establish the score.
+the grader's answer key. The real-key Anthropic run on all 90 saved pages completed in 20.2 s
+with no timeouts, malformed outputs, or provider errors. With `claude-haiku-4-5`, exact-price
+accuracy was 88.89%, currency 97.78%, availability 87.78%, and pack size 97.78%; per-store
+results and estimated cost ($0.06894) are in `eval/out/report.json`. The offline cached
+comparison found at least one label mismatch on 20 pages; some overlap with suspected label
+issues, so this is not a clean measure of model mistakes alone. The earlier local Ollama
+`qwen3:0.6b` run took 575.5 seconds and produced only 11.1% exact-price accuracy, 11.1%
+currency, 14.4% availability, and 13.3% pack size, with 52 timeouts and 22 malformed outputs.
+That small model is not suitable evidence of extraction quality. The grader attempt 2 score
+was 66.2/75; its report said all 40 hidden extractor invocations exited nonzero or printed no
+JSON. The SDK compatibility fix and successful 90-page run address the failure path, but the
+hidden Part C score and next grader score remain unknown until grading.
 
 ## Where AI helped and where it didn't
 
@@ -78,6 +82,7 @@ saved HTML, unit tests, the echo eval, and the running public Docker store.
 ## If I had another day
 
 Capture a Maple product page and Zon index/product request sequence in browser DevTools, then
-verify those adapters against the grader truth on a fresh seed. Run the saved-page eval with
-an available real provider, inspect the report, and use the final submission attempt only
-after confirming the Anthropic CLI emits usable JSON with the grader's runtime settings.
+verify those adapters against grader truth on a fresh seed. Review the Anthropic run's
+availability and price mismatches against the answer key, and confirm the hidden Part C score
+with the grader. The one-page CLI smoke check and 90-page saved-page eval both returned valid
+JSON observations with the Anthropic provider.

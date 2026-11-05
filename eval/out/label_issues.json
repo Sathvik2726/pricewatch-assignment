@@ -1,0 +1,42 @@
+[
+  {
+    "id": "nk-003",
+    "reason": "The page shows kr 7,616 as the current price; the label matches the struck-through kr 7,878 prior price."
+  },
+  {
+    "id": "nk-008",
+    "reason": "The label uses kr 9,800.80 excluding VAT, while the page identifies kr 12,251 including VAT as the consumer price."
+  },
+  {
+    "id": "nk-031",
+    "reason": "The page shows kr 12,760.00; the label says kr 12,670.00 and neither is marked as a prior price."
+  },
+  {
+    "id": "bz-047",
+    "reason": "The label matches the \u20b912,203 M.R.P.; the page's Deal Price is \u20b93,540."
+  },
+  {
+    "id": "bz-052",
+    "reason": "The label matches \u20b9602/month EMI; the listed product price is \u20b918,062."
+  },
+  {
+    "id": "bz-058",
+    "reason": "The label matches \u20b917,550 per kg; the 5 kg pack price shown is \u20b987,751."
+  },
+  {
+    "id": "bz-066",
+    "reason": "The label uses \u20b921,149 after entering coupon SAVE500; the unconditional listed price is \u20b921,649."
+  },
+  {
+    "id": "bz-073",
+    "reason": "The label matches \u20b936,316 per unit; the three-unit pack price shown is \u20b91,08,947."
+  },
+  {
+    "id": "nk-014",
+    "reason": "The page title says pakke \u00e0 6 and shows kr 1 829,67 per item; the pack contains six items, but the label says pack_size 1."
+  },
+  {
+    "id": "nk-022",
+    "reason": "The page explicitly says Utsolgt (sold out), but the label says availability in_stock."
+  }
+]

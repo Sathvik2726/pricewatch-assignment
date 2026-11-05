@@ -1,0 +1,46 @@
+{
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5",
+  "n": 90,
+  "overall": {
+    "price_exact": 0.8889,
+    "currency": 0.9778,
+    "availability": 0.8778,
+    "pack_size": 0.9778
+  },
+  "per_store": {
+    "bazaario": {
+      "n": 45,
+      "price_exact": 0.8667,
+      "currency": 0.9778,
+      "availability": 0.8222,
+      "pack_size": 0.9778
+    },
+    "nordkart": {
+      "n": 45,
+      "price_exact": 0.9111,
+      "currency": 0.9778,
+      "availability": 0.9333,
+      "pack_size": 0.9778
+    }
+  },
+  "errors": {
+    "timeout": 0,
+    "malformed_output": 0,
+    "provider_error": 0
+  },
+  "cost": {
+    "input_tokens": 31160,
+    "output_tokens": 7556,
+    "usd_estimate": 0.06894,
+    "pricing": "estimated"
+  },
+  "latency_ms": {
+    "p50": 1243,
+    "p95": 2102
+  },
+  "baseline": {
+    "price_exact": 0.0
+  },
+  "elapsed_s": 20.2
+}
