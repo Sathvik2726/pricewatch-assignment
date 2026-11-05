@@ -46,22 +46,24 @@ def cmd_extract(a: argparse.Namespace) -> int:
     if store is None:
         print("cannot infer --store from url", file=sys.stderr)
         return 2
-    client = Client()
-    html = Path(a.html).read_text() if a.html else client.get(a.url).text
     if a.llm:
         from .agents.llm_extractor import extract_with_llm
-        from .providers import ProviderError, load_provider
+        from .providers import load_provider
         try:
+            client = Client()
+            html = Path(a.html).read_bytes().decode("utf-8", errors="replace") if a.html else client.get(a.url).text
             obs = extract_with_llm(load_provider(a.provider), store, a.url, html)
-        except ProviderError:
+        except Exception as exc:
             # Keep the machine-readable CLI contract even when a provider is
-            # temporarily unavailable. Diagnostics go to stderr via logging.
-            logging.error("LLM provider failed during extraction")
+            # temporarily unavailable or a page cannot be fetched/read.
+            logging.error("LLM extraction failed (%s)", type(exc).__name__)
             obs = Observation(store=store, product_id=a.url.rstrip("/").split("/")[-1],
                               url=a.url, name="", price_cents=None, currency="",
                               availability="unknown", source="llm",
-                              notes=["LLM provider error; no offer could be extracted"])
+                              notes=[f"LLM extraction error: {type(exc).__name__}"])
     else:
+        client = Client()
+        html = Path(a.html).read_text(encoding="utf-8") if a.html else client.get(a.url).text
         obs = extractor.extract(client, store, cfg["stores"].get(store, {}).get("adapter", store), a.url, html)
     print(json.dumps(obs.to_dict(), indent=2))
     return 0

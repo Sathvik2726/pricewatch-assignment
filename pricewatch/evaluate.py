@@ -8,12 +8,12 @@ from __future__ import annotations
 import json
 import time
 import math
+import logging
 from collections import Counter, defaultdict
-from statistics import median
 from pathlib import Path
 
 from .agents.llm_extractor import extract_with_llm
-from .providers import Provider
+from .providers import Provider, ProviderTimeout
 
 
 def run(provider: Provider, snapshots_dir: str | Path, labels_path: str | Path, out_dir: str | Path) -> dict:
@@ -37,14 +37,15 @@ def run(provider: Provider, snapshots_dir: str | Path, labels_path: str | Path, 
             start = time.perf_counter()
             obs = extract_with_llm(provider, row["store"], row["url"], html, cache_dir=str(out_dir / ".cache"))
             latencies.append((time.perf_counter() - start) * 1000)
-            if any("malformed" in note for note in obs.notes):
+            malformed = any("malformed" in note for note in obs.notes)
+            if malformed:
                 errors["malformed_output"] += 1
-            record = {"id": snap_id, **{m: (
+            record = {"id": snap_id, **({m: False for m in metrics} if malformed else {m: (
                 obs.price_cents == exp.get("price_cents") if m == "price_exact" else
                 obs.currency == exp.get("currency") if m == "currency" else
                 obs.availability == exp.get("availability") if m == "availability" else
                 obs.pack_size == exp.get("pack_size")
-            ) for m in metrics}}
+            ) for m in metrics})}
             # Same-page rule baseline: use the non-LLM semantic extractor; unknown stores yield zero.
             from .agents.extractor import extract
             try:
@@ -54,8 +55,7 @@ def run(provider: Provider, snapshots_dir: str | Path, labels_path: str | Path, 
             baseline_n += 1
             baseline_correct += int(base is not None and base.price_cents == exp.get("price_cents"))
         except Exception as exc:
-            message = str(exc).lower()
-            category = "timeout" if "timeout" in message else "provider_error"
+            category = "timeout" if isinstance(exc, (ProviderTimeout, TimeoutError)) else "provider_error"
             errors[category] += 1
             record = {"id": snap_id, **{m: False for m in metrics}}
         by_store[row.get("store", "unknown")].append(record)
@@ -82,7 +82,18 @@ def run(provider: Provider, snapshots_dir: str | Path, labels_path: str | Path, 
         "elapsed_s": round(time.time() - t0, 2),
     }
     (out_dir / "report.json").write_text(json.dumps(report, indent=2))
-    issues_path = Path(labels_path).with_name("label_issues.json")
-    issues = json.loads(issues_path.read_text()) if issues_path.exists() else []
+    labels_path = Path(labels_path)
+    issue_candidates = [
+        labels_path.with_name("label_issues.json"),
+        snapshots_dir.parent / "label_issues.json",
+        Path(__file__).resolve().parents[1] / "eval" / "label_issues.json",
+    ]
+    issues_path = next((candidate for candidate in dict.fromkeys(issue_candidates) if candidate.is_file()), None)
+    if issues_path is None:
+        logging.warning("no label_issues.json found; writing an empty list")
+        issues = []
+    else:
+        logging.info("using label issues from %s", issues_path)
+        issues = json.loads(issues_path.read_text(encoding="utf-8"))
     (out_dir / "label_issues.json").write_text(json.dumps(issues, indent=2))
     return report

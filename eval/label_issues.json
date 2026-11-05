@@ -30,5 +30,13 @@
   {
     "id": "bz-073",
     "reason": "The label matches ₹36,316 per unit; the three-unit pack price shown is ₹1,08,947."
+  },
+  {
+    "id": "nk-014",
+    "reason": "The page title says pakke à 6 and shows kr 1 829,67 per item; the pack contains six items, but the label says pack_size 1."
+  },
+  {
+    "id": "nk-022",
+    "reason": "The page explicitly says Utsolgt (sold out), but the label says availability in_stock."
   }
 ]
