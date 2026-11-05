@@ -36,6 +36,8 @@ def test_eval_keeps_going_and_caches(tmp_path):
     assert first["errors"]["timeout"] == 1
     assert first["overall"]["price_exact"] == 0.3333
     assert first["overall"]["pack_size"] == 0.3333
+    assert first["cost"]["input_tokens"] > 0
+    assert first["cost"]["usd_estimate"] >= 0
     assert len(list((out / ".cache").glob("*.json"))) == 2
     assert (out / "report.json").exists() and (out / "label_issues.json").exists()
     assert json.loads((out / "label_issues.json").read_text()) == [{"id": "snapshot", "reason": "visible mismatch"}]

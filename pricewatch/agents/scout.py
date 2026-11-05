@@ -22,22 +22,22 @@ PRODUCT_PATH = {
 }
 
 
-def discover(client: Client, store: str, index_url: str) -> tuple[list[str], list[str]]:
-    urls, notes, hints = discover_with_hints(client, store, index_url)
-    # Keep the historical two-value return contract; the orchestrator consumes these
-    # optional catalog hints after discovery without changing callers' expectations.
-    client._pricewatch_catalog_hints = hints  # type: ignore[attr-defined]
+def discover(client: Client, store: str, index_url: str, deadline: float | None = None) -> tuple[list[str], list[str]]:
+    urls, notes, _ = discover_with_hints(client, store, index_url, deadline)
     return urls, notes
 
 
-def discover_with_hints(client: Client, store: str, index_url: str) -> tuple[list[str], list[str], dict[str, dict]]:
+def discover_with_hints(client: Client, store: str, index_url: str, deadline: float | None = None) -> tuple[list[str], list[str], dict[str, dict]]:
     """Discover product links and capture an unambiguous catalog-card offer when present.
 
     Card prices are a fallback for stores that withhold their detail-page offer from a
     browser-like crawl. The detail page always has precedence in the orchestrator.
     """
     notes: list[str] = []
-    r = client.get(index_url)
+    try:
+        r = client.get(index_url, _deadline=deadline)
+    except TimeoutError:
+        return [], ["scan deadline reached before index discovery completed"], {}
     if r.status_code != 200:
         notes.append(f"index returned HTTP {r.status_code}")
         return [], notes, {}

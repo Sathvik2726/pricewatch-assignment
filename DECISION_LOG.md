@@ -2,38 +2,80 @@
 name: "Sathvik Naidu"
 median_basis: "observations"
 levels_attempted: [1, 2, 3, 4, 5]
-llm_provider: "anthropic"
-llm_model: "PRICEWATCH_MODEL (runtime configurable)"
+llm_provider: "openai-compatible (Ollama local smoke test)"
+llm_model: "qwen3:0.6b; no full real-key eval completed"
 ai_tools_used: ["ChatGPT"]
 hours_spent: 1
 ---
 
 # Decision log
 
-## Stage 1 — the false alerts
+## Stage 1 — false alerts
 
-The Maple adapter selected the first price node, which can be the struck-through reference price, so unchanged current prices could appear to jump. The drop formula also divided by the new price; it reported 25% for a change from 100 to 80 instead of the conventional 20%. I now prioritize sale/current-price selectors, exclude comparison prices, and divide by the previous amount. Drop comparisons also require the same currency. The regression assertion was corrected to the actual percentage definition.
+The Maple selector previously used a combined CSS selector, which returns the first matching
+element in document order. A comparison price or head metadata could therefore beat a sale or
+current price. The extractor now checks selectors in priority order and skips struck-through,
+comparison, and per-unit amounts. The drop percentage is divided by the previous price; the
+reported 100-to-80 change is 20%, not 25%. Zon can withhold detail offers. I kept its
+single-price catalog-card fallback behind an explicit store setting, and it now follows a
+variant only when the page marks that variant selected. I have not supplied a real-browser
+Network capture, so the remaining Zon request-behavior difference is not established.
 
-## Stage 2 — the median
+## Stage 2 — median
 
-I use every valid prior observation in the trailing time window, ending immediately before the current observation, as ISSUE-2 specifies. A daily-close median would give days equal weight, but that conflicts with the issue's explicit “all observations” acceptance contract. Fewer than three valid observations, no prices, malformed timestamps, or mixed currencies produce no median alert. The median is rounded to an integer minor unit. When both rules match, `below_median` takes precedence.
+The default basis is all valid observations, matching the ISSUE-2 acceptance tests and the
+starter's allowed "observations" token. A rule may opt into "daily_close", using the last
+observation in each UTC day. Timestamps are normalized to UTC. The trailing window excludes
+its exact start and the current observation. I compare against the exact median with decimal
+arithmetic and round only the alert's displayed median half up. Fewer than three prices or
+mixed currencies produce no alert. "below_median" has priority over "drop_pct".
 
-## Levels 3–5 — how you got in
+## Levels 3–5 — store behavior
 
-Zon's prior adapter depended on deployment-specific class hashes. It now reads the main offer area before the separately labeled sellers, ignores struck-through and per-unit values when a pack total is available, and follows the first advertised variant when selection is required. Shield's HTTP 503 contains a JavaScript proof challenge; the shared client answers the proof using the page's current challenge values, waits the served delay, preserves the resulting cookie, and reads the product's inert JSON state. Flux's delivered script declares its API route, query, build id, signature inputs, and whether amounts are major or minor units; the adapter reads that contract and normalizes the offer. A fresh-seed scan revealed two more contract variations: Flux used SHA-1 with a bundle-declared signature length, and Shield changed its proof input transform and digest slice. Both paths now read those details from the served scripts. With those changes, a fresh-seed local scan priced all 56 products. These paths use only content served by the mock stores and obey each robots policy and crawl delay.
+The shared HTTP client now applies longest-match robots rules with wildcard and end-anchor
+support, observes Crawl-delay, and does not retry before a long Retry-After. It also retries
+transient 5xx responses. Shield's challenge is solved by the shared client; its extractor
+reads only the resulting inert offer state and converts major/minor amounts. Flux reads a
+same-origin application contract, caches the bundle for one scan, retries stale offers, and
+does not report a price that remains marked stale. On the latest public-seed scan, 56 products
+were found: Corner 10/10 priced, Maple 12/12, Shield 10/10, Zon 10/12, and Flux 10/12. Two
+Zon pages had no selected primary offer or unambiguous card price; two Flux offers stayed
+stale after retries. These are known limits, not claims of full extraction coverage.
 
-The full hosted scan found 56 products: Corner 10/10 priced, Maple 12/12, Shield 10/10, Flux 12/12, and Zon 10/12. Zon returned two catalog cards with an em dash and no detail-page offer; for nine others, its detail page withheld the offer but its product card showed exactly one price, which the scout retained as a fallback. All requests obeyed the hosted robots crawl delay.
+The scan has a 200-second global deadline, stops scheduling new products when it expires, and
+flushes each completed observation to JSONL. Catalog hints are passed explicitly instead of
+being attached to the shared client, avoiding a cross-store race.
 
-## Stage 3 — what the model got wrong
+## Stage 3 — unknown-store extraction
 
-The Anthropic path uses `PRICEWATCH_MODEL` with a default and preserves `metadata.source_url`. The extractor strips noisy markup while retaining JSON-LD, validates output, tolerates fenced or malformed JSON, and can cache raw responses by provider, URL, and page content. The eval now counts provider failures as incorrect and reports accuracy by store and field, errors, latency, and baseline. The provider protocol exposes no token usage or pricing, so the harness cannot report actual token counts or a defensible cost estimate. I could not run a real-key eval in this environment; no `eval/out` model report is claimed.
+The Anthropic SDK path no longer sends "temperature", limits retry time, records usage, and
+wraps unexpected SDK failures. The CLI returns a JSON Observation for LLM-path failures.
+The extractor asks for printed price text, normalizes ISO currency and minor units (including
+zero- and three-decimal currencies), preserves metadata and struck-price cues, checks that
+the quoted digits occur in the page, uses JSON-LD as a fallback, and retries malformed JSON
+once. The eval runs six pages concurrently in label order, classifies timeouts by exception
+type, marks malformed records wrong, reports estimated token cost, and locates label issues
+from common grader paths.
 
-I reviewed the snapshots and added eight likely label issues to `eval/label_issues.json`, with one-line evidence for each. The coupon-dependent `bz-066` and the tax-inclusive `nk-008` cases are especially arguable. The real Anthropic eval is still unrun because no API key was available; therefore `eval/out/report.json` is not claimed as a model result. The CLI can infer a fallback store label from an unfamiliar URL, and the parser accepts `currency: null` when no offer is present, as its output schema allows. The full test suite passes: 29 tests.
+I added ten suspected label issues; nk-014 (six-pack) and nk-022 ("Utsolgt") are directly
+visible in their saved pages. The other entries remain candidates and should be compared with
+the grader's answer key. The full Anthropic 90-page run and hidden-store Part C have not been
+verified with a real Anthropic key. My local qwen3:0.6b smoke test returned incorrect currency
+and pack size on one product, so it is not evidence of model accuracy. The grader attempt 2
+score was 66.2/75; its report said all 40 hidden extractor invocations exited nonzero or
+printed no JSON. The Anthropic compatibility fix addresses the likely SDK crash, but only a
+new grader attempt can establish the score.
 
 ## Where AI helped and where it didn't
 
-ChatGPT helped map the existing modules and draft the first implementation pass. The important corrections came from checking the issue contract against the starter tests and inspecting the provided HTML: the original percentage assertion encoded the buggy denominator, and `kr` needed locale-aware parsing. I used the explicit ISSUE-2 wording for the median basis where the broader README describes daily closes.
+ChatGPT helped inspect the code and identify the unsupported Anthropic "temperature" argument.
+Its first-pass recommendations about Maple variants and Zon browser behavior need real page
+and DevTools evidence; I did not infer those request details. I tested local behavior with
+saved HTML, unit tests, the echo eval, and the running public Docker store.
 
 ## If I had another day
 
-Run the grader's fault-injected eval and, when an Anthropic key is available, a real model eval; validate the eight candidate label issues against the answer key. Then test a fresh local container seed, especially Zon’s two no-offer cases.
+Capture a Maple product page and Zon index/product request sequence in browser DevTools, then
+verify those adapters against the grader truth on a fresh seed. Run the saved-page eval with
+an available real provider, inspect the report, and use the final submission attempt only
+after confirming the Anthropic CLI emits usable JSON with the grader's runtime settings.

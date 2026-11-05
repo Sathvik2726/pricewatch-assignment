@@ -1,7 +1,9 @@
 import json
+import yaml
 
 from pricewatch import providers
 from pricewatch.cli import main
+from pricewatch.models import Observation
 
 
 def test_llm_extract_accepts_an_unconfigured_store(tmp_path, capsys):
@@ -43,3 +45,20 @@ def test_llm_extract_prints_observation_for_unexpected_provider_error(tmp_path, 
     assert observation["source"] == "llm"
     assert observation["notes"] == ["LLM extraction error: TypeError"]
     assert observation["price_cents"] is None
+
+
+def test_scan_flushes_observations_as_they_arrive(tmp_path, monkeypatch):
+    from pricewatch import orchestrator
+
+    stores_file = tmp_path / "stores.yaml"
+    stores_file.write_text(yaml.safe_dump({"base_url": "http://unused", "stores": {}}))
+    output = tmp_path / "partial.jsonl"
+    observation = Observation("corner", "p1", "https://x/p1", "Widget", 100, "USD")
+
+    def fake_scan(cfg, stores, workers, deadline_seconds, on_observation):
+        on_observation(observation)
+        return [observation]
+
+    monkeypatch.setattr(orchestrator, "scan", fake_scan)
+    assert main(["scan", "--stores-file", str(stores_file), "--out", str(output), "--deadline", "2"]) == 0
+    assert json.loads(output.read_text().splitlines()[0])["product_id"] == "p1"

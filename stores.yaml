@@ -3,6 +3,6 @@ base_url: http://localhost:4000
 stores:
   corner: { index: /stores/corner/,  adapter: corner }
   maple:  { index: /stores/maple/,   adapter: maple }
-  zon:    { index: /stores/zon/,     adapter: zon }
+  zon:    { index: /stores/zon/,     adapter: zon, catalog_card_fallback: true }
   shield: { index: /stores/shield/,  adapter: shield }
   flux:   { index: /stores/flux/,    adapter: flux }

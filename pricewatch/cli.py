@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -24,14 +25,30 @@ from .models import Observation
 def cmd_scan(a: argparse.Namespace) -> int:
     from . import orchestrator
     cfg = config.load_stores(a.stores_file, a.stores_url)
-    obs = orchestrator.scan(cfg, a.store or None, workers=a.workers)
+    output = None
+    if a.out:
+        output_path = Path(a.out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output = output_path.open("w", encoding="utf-8")
+    output_lock = threading.Lock()
+
+    def emit_observation(observation: Observation) -> None:
+        line = json.dumps(observation.to_dict())
+        with output_lock:
+            if output is None:
+                print(line, flush=True)
+            else:
+                output.write(line + "\n")
+                output.flush()
+
+    try:
+        obs = orchestrator.scan(cfg, a.store or None, workers=a.workers,
+                                deadline_seconds=a.deadline, on_observation=emit_observation)
+    finally:
+        if output is not None:
+            output.close()
     if a.db:
         storage.History(a.db).add(obs)
-    if a.out:
-        storage.write_jsonl(a.out, obs)
-    else:
-        for o in obs:
-            print(json.dumps(o.to_dict()))
     logging.info("scanned %d products", len(obs))
     return 0
 
@@ -106,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("scan"); s.set_defaults(fn=cmd_scan)
     s.add_argument("--stores-url", default=None); s.add_argument("--stores-file", default="stores.yaml")
     s.add_argument("--store", action="append"); s.add_argument("--out"); s.add_argument("--db"); s.add_argument("--workers", type=int, default=4)
+    s.add_argument("--deadline", type=float, default=200, help="overall scan time budget in seconds")
 
     s = sub.add_parser("extract"); s.set_defaults(fn=cmd_extract)
     s.add_argument("--url", required=True); s.add_argument("--html"); s.add_argument("--store"); s.add_argument("--stores-file", default="stores.yaml")

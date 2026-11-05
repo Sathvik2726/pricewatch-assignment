@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from . import ProviderError, ProviderTimeout
 
@@ -19,7 +20,17 @@ class AnthropicProvider:
         # still set a tighter timeout for evaluation runs.
         self.client = anthropic.Anthropic(max_retries=1, timeout=20.0)
         self.model = model or os.environ.get("PRICEWATCH_MODEL", "claude-haiku-4-5")
-        self.last_usage: dict[str, int] | None = None
+        self._usage_local = threading.local()
+
+    @property
+    def last_usage(self) -> dict[str, int] | None:
+        return getattr(getattr(self, "_usage_local", None), "value", None)
+
+    @last_usage.setter
+    def last_usage(self, value: dict[str, int] | None) -> None:
+        if not hasattr(self, "_usage_local"):
+            self._usage_local = threading.local()
+        self._usage_local.value = value
 
     def complete(self, system: str, user: str, *, metadata: dict, timeout: float = 20.0) -> str:
         assert "source_url" in metadata

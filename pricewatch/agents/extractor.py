@@ -5,6 +5,7 @@ their own networking except through the Client they are given, so throttling and
 stay in one place.
 
 Adapters are registered by name; `stores.yaml` maps each store to an adapter.
+
 """
 from __future__ import annotations
 
@@ -12,7 +13,6 @@ import json
 import hashlib
 import copy
 import re
-import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Callable, Optional
 from urllib.parse import urljoin, urlparse
@@ -20,9 +20,10 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from ..http import Client, script_challenge_answer
+from ..http import Client
 from ..models import Observation
 from .normalizer import parse_money, unit_price
+
 
 ADAPTERS: dict[str, Callable[[Client, str, str, str], Observation]] = {}
 
@@ -69,14 +70,31 @@ def extract_maple(client: Client, store: str, url: str, html: str) -> Observatio
     soup = BeautifulSoup(html, "html.parser")
     title = soup.select_one(".product__title") or soup.find("h1")
     name = title.get_text(" ", strip=True) if title else ""
-    # Prefer explicit current/sale price; exclude strike-through/comparison prices.
-    price_el = soup.select_one(".price--sale, [data-current-price], meta[property='product:price:amount']")
-    if price_el is None:
-        for candidate in soup.select(".price .price, .price [class*='price'], [itemprop='price']"):
-            if candidate.find_parent(class_=re.compile(r"compare|was|old", re.I)) or candidate.get("class") and any("compare" in c or "old" in c for c in candidate.get("class", [])):
+    # Evaluate selector priority explicitly; select_one on a combined selector uses
+    # document order, which can let a head meta tag or comparison price win.
+    price_el = None
+    selectors = [
+        ".price--sale", "[data-current-price]", ".price__current", "[itemprop='price']",
+        ".price .price", ".price [class*='price']",
+    ]
+    for selector in selectors:
+        for candidate in soup.select(selector):
+            classes = " ".join(candidate.get("class", [])) if isinstance(candidate.get("class"), list) else str(candidate.get("class", ""))
+            if re.search(r"compare|was|old|list[-_ ]?price", classes, re.I):
+                continue
+            if candidate.find(["s", "del", "strike"]):
+                continue
+            if candidate.find_parent(class_=re.compile(r"compare|was|old|list[-_ ]?price", re.I)):
+                continue
+            candidate_text = candidate.get("content") or candidate.get("data-current-price") or candidate.get_text(" ", strip=True)
+            if re.search(r"(?:/|\bper\b|\bpr\.?\s*)(?:unit|item|kg|g|l|stk\b|piece)", candidate_text, re.I):
                 continue
             price_el = candidate
             break
+        if price_el is not None:
+            break
+    if price_el is None:
+        price_el = soup.select_one("meta[property='product:price:amount']")
     price_text = (price_el.get("content") or price_el.get("data-current-price") or price_el.get_text(" ", strip=True)) if price_el else ""
     price_cents, currency = parse_money(price_text, "EUR")
     compare_el = soup.select_one(".price--compare, [class*='compare-at'], del, s")
@@ -103,9 +121,9 @@ def extract_zon(client: Client, store: str, url: str, html: str) -> Observation:
     m = re.search(r"Pack of (\d+)", name)
     pack = int(m.group(1)) if m else 1
     price_cents, avail, variant_links, needs_variant = _zon_main_offer(soup, title, url)
-    # The page explicitly offers variant links but may omit the default variant's offer.
-    # Follow the first advertised variant once; don't use the unrelated seller prices.
-    if price_cents is None and needs_variant and "variant=" not in url:
+    # A variant must be selected explicitly; an arbitrary first variant may not be
+    # the default offer and can create false price changes.
+    if price_cents is None and needs_variant and variant_links and "variant=" not in url:
         for variant_url in variant_links[:1]:
             try:
                 response = client.get(variant_url, headers={
@@ -146,14 +164,20 @@ def _zon_main_offer(soup: BeautifulSoup, title, base_url: str) -> tuple[int | No
             break
         for link in sibling.find_all("a", href=True):
             if re.search(r"(?:\?|&)variant=[^&]+", link["href"]):
-                variants.append(urljoin(base_url, link["href"]))
+                selected = (link.get("aria-selected") == "true" or link.get("aria-checked") == "true"
+                            or link.has_attr("data-selected") or "selected" in link.get("class", []))
+                if selected:
+                    variants.append(urljoin(base_url, link["href"]))
         # Drop crossed-out/list prices before considering visible current amounts.
         clean = copy.deepcopy(sibling)
         for old in clean.find_all(["s", "del"]):
             old.decompose()
         chunks.append(clean.get_text(" ", strip=True))
     text = " ".join(chunks)
-    needs_variant = bool(variants) and bool(re.search(r"select|choose|pick", text, re.I))
+    has_variant_link = any(re.search(r"(?:\?|&)variant=[^&]+", link.get("href", ""))
+                           for sibling in title.next_siblings if getattr(sibling, "name", None)
+                           for link in sibling.find_all("a", href=True))
+    needs_variant = has_variant_link and bool(re.search(r"select|choose|pick", text, re.I))
     pack_match = re.search(r"\bpack\s+of\s+\d+\s*:\s*([^\n]+?)(?=\s+(?:list\s+price|in\s+stock|out\s+of\s+stock)|$)", text, re.I)
     price_cents = None
     if pack_match:
@@ -170,113 +194,112 @@ def _zon_main_offer(soup: BeautifulSoup, title, base_url: str) -> tuple[int | No
 # --------------------------------------------------------------------------- levels 4-5
 @adapter("shield")
 def extract_shield(client: Client, store: str, url: str, html: str) -> Observation:
-    # Solve the short-lived proof supplied by the mock store's own JavaScript, then
-    # refresh through the shared session so its clearance cookie is retained.
-    for _ in range(2):
-        soup = BeautifulSoup(html, "html.parser")
-        challenge = soup.select_one("[data-s][data-p]") if "checking your browser" in html.lower() else None
-        if challenge is None:
-            break
-        salt, proof = challenge.get("data-s"), challenge.get("data-p")
-        if not salt or not proof:
-            break
-        script = soup.find("script", string=re.compile(r"fetch\(")) or next(
-            (tag for tag in soup.find_all("script") if "fetch(" in tag.get_text()), None
-        )
-        script_text = script.get_text() if script else ""
-        endpoint_match = re.search(r"fetch\(\s*(['\"])(.*?)\1", script_text)
-        if endpoint_match is None:
-            break
-        try:
-            digest, delay = script_challenge_answer(script_text, salt, proof)
-        except (ValueError, KeyError, SyntaxError):
-            break
-        # Match the delay observed in the served challenge script; Client adds Crawl-delay.
-        time.sleep(delay)
-        origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-        try:
-            posted = client.post(urljoin(url, endpoint_match.group(2)),
-                                 headers={"Referer": url, "Origin": origin, "Content-Type": "application/json"},
-                                 json={"s": salt, "p": proof, "a": digest})
-            if posted.status_code < 200 or posted.status_code >= 300:
-                break
-            response = client.get(url, headers={"Referer": url})
-            html = response.text
-        except (PermissionError, requests.RequestException):
-            break
     soup = BeautifulSoup(html, "html.parser")
     state = _embedded_state(soup)
     product = state.get("product") if isinstance(state, dict) else None
     offer = product.get("offer") if isinstance(product, dict) else None
     if isinstance(offer, dict):
-        try:
-            price = int(Decimal(str(offer["amount"]))) if offer.get("amount") is not None else None
-        except (InvalidOperation, ValueError, TypeError):
-            price = None
+        price = _shield_price_cents(offer.get("amount"), offer.get("unit"))
         stock = str(offer.get("stock") or "").upper()
         availability = "in_stock" if stock == "IN_STOCK" else "out_of_stock" if stock == "OUT_OF_STOCK" else "unknown"
         was = offer.get("was")
-        try:
-            compare = int(Decimal(str(was))) if was is not None else None
-        except (InvalidOperation, ValueError, TypeError):
-            compare = None
+        compare = _shield_price_cents(was, offer.get("wasUnit", offer.get("unit")))
         return Observation(store, str(product.get("id") or _pid_from_url(url)), url,
                            str(product.get("title") or ""), price,
                            str(offer.get("currency") or "GBP"), compare_at_cents=compare,
                            availability=availability)
-    return _extract_semantic_page(store, url, soup, "GBP")
+    return Observation(store, _pid_from_url(url), url, soup.h1.get_text(" ", strip=True) if soup.h1 else "",
+                       None, "GBP", availability="unknown",
+                       notes=["Shield offer state missing; no reliable price found"])
+
+
+def _shield_price_cents(amount, unit) -> int | None:
+    if amount is None:
+        return None
+    try:
+        value = Decimal(str(amount))
+        unit_text = str(unit or "").lower()
+        if unit_text == "major" or (not unit_text and value != value.to_integral_value()):
+            value *= 100
+        elif unit_text not in {"", "minor"}:
+            return None
+        return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 @adapter("flux")
 def extract_flux(client: Client, store: str, url: str, html: str) -> Observation:
     soup = BeautifulSoup(html, "html.parser")
-    obs = _extract_semantic_page(store, url, soup, "USD")
-    if obs.price_cents is not None:
-        return obs
+    fallback = _extract_semantic_page(store, url, soup, "USD")
     # The app publishes the API contract in a same-origin script. Read that script rather
     # than guessing endpoints, signatures, or price units; all calls still use Client.
     origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-    script = soup.find("script", src=True)
-    if script is None:
-        obs.notes.append("Flux application script reference not found")
-        return obs
-    script_url = urlparse(url)._replace(path=urlparse(script["src"]).path, query="", fragment="").geturl() if script["src"].startswith("/") else script["src"]
+    contract = None
+    for script in soup.find_all("script", src=True):
+        script_url = urljoin(url, script["src"])
+        parsed_script = urlparse(script_url)
+        if (parsed_script.scheme, parsed_script.netloc) != (urlparse(url).scheme, urlparse(url).netloc):
+            continue
+        cache_key = f"flux-bundle:{script_url}"
+        bundle = client.cache.get(cache_key)
+        if not isinstance(bundle, str):
+            try:
+                bundle_response = client.get(script_url, headers={"Referer": url, "Accept": "text/javascript,*/*;q=0.8"})
+            except (PermissionError, requests.RequestException):
+                continue
+            if bundle_response.status_code != 200:
+                continue
+            bundle = bundle_response.text
+            client.cache[cache_key] = bundle
+        try:
+            endpoint, query = _flux_contract(bundle)
+            contract = (bundle, endpoint, query)
+            break
+        except ValueError:
+            continue
+    if contract is None:
+        fallback.notes.append("Flux API contract not found in same-origin application scripts")
+        return fallback
+    bundle, endpoint, query = contract
     try:
-        bundle_response = client.get(script_url, headers={"Referer": url, "Accept": "text/javascript,*/*;q=0.8"})
-        if bundle_response.status_code != 200:
-            obs.notes.append(f"Flux application script returned HTTP {bundle_response.status_code}")
-            return obs
-        bundle = bundle_response.text
-        endpoint, query = _flux_contract(bundle)
         signature = _flux_signature(bundle, _product_sku(soup, url))
         build = soup.select_one('meta[name="flux-build"]')
         if build is None or not build.get("content"):
             raise ValueError("Flux build identifier missing")
         sku = _product_sku(soup, url)
-        response = client.post(origin + endpoint, headers={
-            "Referer": url, "Origin": origin, "Accept": "application/json",
-            "Content-Type": "application/json", "X-Flux-Sig": signature,
-            "X-Flux-Build": build["content"],
-        }, json={"query": query, "variables": {"sku": sku}})
-        if response.status_code != 200:
-            obs.notes.append(f"Flux offer API returned HTTP {response.status_code}")
-            return obs
-        payload = response.json()
-        product = (payload.get("data") or {}).get("product") if isinstance(payload, dict) else None
-        offer = product.get("offer") if isinstance(product, dict) else None
-        if not isinstance(offer, dict):
-            obs.notes.append("Flux API response did not contain a product offer")
-            return obs
+        api_url = urljoin(origin, endpoint)
+        payload = None
+        for attempt in range(3):
+            response = client.post(api_url, headers={
+                "Referer": url, "Origin": origin, "Accept": "application/json",
+                "Content-Type": "application/json", "X-Flux-Sig": signature,
+                "X-Flux-Build": build["content"],
+            }, json={"query": query, "variables": {"sku": sku}})
+            if response.status_code != 200:
+                fallback.notes.append(f"Flux offer API returned HTTP {response.status_code}")
+                return fallback
+            payload = response.json()
+            product = (payload.get("data") or {}).get("product") if isinstance(payload, dict) else None
+            offer = product.get("offer") if isinstance(product, dict) else None
+            if not isinstance(offer, dict):
+                fallback.notes.append("Flux API response did not contain a product offer")
+                return fallback
+            if not offer.get("stale"):
+                break
+        if not isinstance(offer, dict) or offer.get("stale"):
+            return Observation(store, sku, url, str((product or {}).get("title") or fallback.name), None,
+                               str((offer or {}).get("currency") or "USD"),
+                               availability="unknown", notes=["Flux API offer remained stale after retries"])
         amount = _flux_price_cents(offer.get("amount"), offer.get("unit"))
         stock = str(offer.get("stock") or "").upper()
         availability = "in_stock" if stock == "IN_STOCK" else "out_of_stock" if stock == "OUT_OF_STOCK" else "unknown"
-        notes = ["API price marked stale"] if offer.get("stale") else []
         return Observation(store=store, product_id=sku, url=url,
-                           name=str(product.get("title") or obs.name), price_cents=amount,
-                           currency=str(offer.get("currency") or ""), availability=availability, notes=notes)
+                           name=str(product.get("title") or fallback.name), price_cents=amount,
+                           currency=str(offer.get("currency") or ""), availability=availability)
     except (ValueError, TypeError, KeyError, PermissionError, requests.RequestException, InvalidOperation) as exc:
-        obs.notes.append(f"Flux API extraction failed: {exc}")
-    return obs
+        fallback.notes.append(f"Flux API extraction failed: {exc}")
+    return fallback
 
 
 def _product_sku(soup: BeautifulSoup, url: str) -> str:

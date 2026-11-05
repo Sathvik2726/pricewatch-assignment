@@ -21,6 +21,7 @@ def test_anthropic_request_uses_supported_arguments_and_records_usage():
     provider = AnthropicProvider.__new__(AnthropicProvider)
     provider.client = SimpleNamespace(messages=Messages())
     provider.model = "claude-haiku-test"
+    provider.last_usage = None
 
     assert provider.complete("sys", "page", metadata={"source_url": "https://shop.example/p/1"}) == '{"price_cents": 100}'
     assert "temperature" not in calls[0]
@@ -36,6 +37,7 @@ def test_anthropic_provider_wraps_unexpected_sdk_errors():
     provider = AnthropicProvider.__new__(AnthropicProvider)
     provider.client = SimpleNamespace(messages=Messages())
     provider.model = "claude-haiku-test"
+    provider.last_usage = None
 
     with pytest.raises(ProviderError, match="TypeError"):
         provider.complete("sys", "page", metadata={"source_url": "https://shop.example/p/1"})
